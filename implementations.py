@@ -202,3 +202,40 @@ def ridge_regression(y, tx, lambda_):
     N,D = tx.shape
     w = np.dot(np.linalg.inv(tx.T @ tx + 2*N*lambda_*np.eye(D)),tx.T @ y)
     return w
+
+def reg_logistic_regression(y, tx, lambda_, initial_w, max_iters, gamma):
+    """Regularized logistic regression (penalty lambda * ||w||^2) with GD."""
+    w = np.array(initial_w, dtype=float)
+    for _ in range(max_iters):
+        grad = compute_logistic_gradient(y, tx, w) + 2 * lambda_ * w
+        w = w - gamma * grad
+    return w, compute_logistic_loss(y, tx, w) 
+
+
+def compute_mse(y, tx, w):
+    """MSE loss with the 1/2 factor: 1/(2N) * sum (y - tx w)^2."""
+    e = y - tx @ w
+    return e @ e / (2 * len(y))
+ 
+ 
+def compute_mse_gradient(y, tx, w):
+    """Gradient of the MSE: -1/N * tx^T (y - tx w)."""
+    e = y - tx @ w
+    return -tx.T @ e / len(y)
+ 
+ 
+def sigmoid(z):
+    """Numerically stable sigmoid."""
+    return 0.5 * (1.0 + np.tanh(0.5 * z))
+ 
+ 
+def compute_logistic_loss(y, tx, w):
+    """Negative log-likelihood averaged over N, for y in {0, 1}.
+    loss = 1/N * sum( log(1 + exp(z)) - y * z ),  z = tx w."""
+    z = tx @ w
+    return np.mean(np.logaddexp(0.0, z) - y * z)
+ 
+ 
+def compute_logistic_gradient(y, tx, w):
+    """Gradient of the logistic loss: 1/N * tx^T (sigmoid(tx w) - y)."""
+    return tx.T @ (sigmoid(tx @ w) - y) / len(y)
