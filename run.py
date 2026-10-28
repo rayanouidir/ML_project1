@@ -1,11 +1,3 @@
-"""Project 1 - pipeline: preprocessing, bagged regularized logistic regression,
-F1-optimal threshold, CSV submission.
-
-Usage:
-    python run.py        # CV (to get the threshold) + final training + submission.csv
-    python run.py cv     # ablation study (one change at a time w.r.t. BASE)
-"""
-
 import sys
 import time
 import warnings
@@ -30,9 +22,6 @@ BASE = dict(max_nan=0.5, onehot_max=6, special=True, poly=False,
             lambda_=1e-3, gamma=0.1, max_iters=1000, ratio=3, n_bags=1)
 
 
-# ----------------------------------------------------------------------------
-# Data loading (chunked, float32, to limit memory)
-# ----------------------------------------------------------------------------
 def _read_chunked(path, chunk=20000):
     blocks = []
     with open(path) as f:
@@ -55,9 +44,6 @@ def load_data_light(data_path):
 
 
 def find_special_codes(x):
-    """Columns whose max is 9/99/999 use 7/77/777 ("don't know") and 9/99/999
-    ("refused") as codes -> NaN. In "number of days" columns (max 99, with 77 and
-    88 present) 88 means "none", i.e. 0."""
     codes, zero88 = {}, []
     mx = np.nanmax(x, axis=0)
     for j, m in enumerate(mx):
@@ -77,9 +63,7 @@ def apply_special_codes(x, codes, zero88):
     return x
 
 
-# ----------------------------------------------------------------------------
-# Preprocessing
-# ----------------------------------------------------------------------------
+
 def fit_preprocessor(x, y, max_nan=0.5, onehot_max=6, special=True, poly=False,
                      zero88=True, inter_k=8, miss_ind_min=0.01, clip=5.0):
     """Learn all preprocessing statistics on (x, y)."""
@@ -93,10 +77,10 @@ def fit_preprocessor(x, y, max_nan=0.5, onehot_max=6, special=True, poly=False,
     p["keep"] = np.where((nan_frac <= max_nan) & (std > 0))[0]
     x, nan_frac = x[:, p["keep"]], nan_frac[p["keep"]]
 
-    p["miss_cols"] = np.where(nan_frac > miss_ind_min)[0]    # missing-value indicators
+    p["miss_cols"] = np.where(nan_frac > miss_ind_min)[0]   
     p["median"] = np.nanmedian(x, axis=0)
 
-    cats = {}                                                 # few distinct values -> one-hot
+    cats = {}                                             
     for j in range(x.shape[1]):
         vals = np.unique(x[~np.isnan(x[:, j]), j])
         if len(vals) <= onehot_max:
@@ -108,7 +92,6 @@ def fit_preprocessor(x, y, max_nan=0.5, onehot_max=6, special=True, poly=False,
     p["mean"] = xi[:, p["num_cols"]].mean(axis=0)
     p["std"] = xi[:, p["num_cols"]].std(axis=0) + 1e-8
 
-    # pairwise products of the inter_k numeric features most correlated with y
     p["ia"] = p["ib"] = np.array([], dtype=int)
     if inter_k > 1:
         z = np.clip((xi[:, p["num_cols"]] - p["mean"]) / p["std"], -clip, clip)
@@ -133,9 +116,6 @@ def transform(x, p, clip=5.0):
     return np.hstack(blocks).astype(np.float64)
 
 
-# ----------------------------------------------------------------------------
-# Metric / threshold
-# ----------------------------------------------------------------------------
 def f1_score(y_true, y_pred):
     tp = np.sum((y_true == 1) & (y_pred == 1))
     fp = np.sum((y_true == 0) & (y_pred == 1))
@@ -144,24 +124,17 @@ def f1_score(y_true, y_pred):
 
 
 def best_threshold(y_true, probs, grid=np.arange(0.05, 0.95, 0.005)):
-    """Decision threshold maximizing F1 (crucial with ~9% positives)."""
     scores = [f1_score(y_true, (probs >= t).astype(int)) for t in grid]
     i = int(np.argmax(scores))
     return grid[i], scores[i]
 
 
-# ----------------------------------------------------------------------------
-# Training / prediction (bagging of undersampled models)
-# ----------------------------------------------------------------------------
 def prep_args(params):
     return {k: params[k] for k in ("max_nan", "onehot_max", "special", "poly",
                                    "zero88", "inter_k")}
 
 
 def fit_and_train(x_raw, y, idx, params, rng):
-    """Fit the preprocessor on a subsample of rows idx, then train n_bags
-    regularized logistic regressions, each on all positives + a different random
-    subset of negatives. Returns (preprocessor, W) with W of shape (D, n_bags)."""
     sub = idx if len(idx) <= FIT_SAMPLE else rng.choice(idx, FIT_SAMPLE, replace=False)
     p = fit_preprocessor(x_raw[sub], y[sub], **prep_args(params))
 
@@ -180,18 +153,13 @@ def fit_and_train(x_raw, y, idx, params, rng):
 
 
 def predict_proba(x_raw, idx, p, W):
-    """Mean probability over the bagged models, computed chunk by chunk."""
     out = [sigmoid(transform(x_raw[idx[s:s + CHUNK]], p) @ W).mean(axis=1)
            for s in range(0, len(idx), CHUNK)]
     return np.concatenate(out)
 
 
-# ----------------------------------------------------------------------------
-# Cross-validation / submission
-# ----------------------------------------------------------------------------
+
 def cross_validate(x_raw, y, params, k=K_FOLDS):
-    """K-fold CV (preprocessing refitted in each fold, no leakage).
-    Returns (mean F1 at the best threshold, median best threshold)."""
     rng = np.random.RandomState(SEED)
     folds = np.array_split(rng.permutation(len(y)), k)
     f1s, thrs = [], []
@@ -207,7 +175,6 @@ def cross_validate(x_raw, y, params, k=K_FOLDS):
 
 
 def make_submission(x_raw, y, x_test, test_ids, params, thr, f1):
-    """Train on the full training set, predict test with threshold thr, write CSVs."""
     rng = np.random.RandomState(SEED)
     p, W = fit_and_train(x_raw, y, np.arange(len(y)), params, rng)
     probs = predict_proba(x_test, np.arange(len(x_test)), p, W)
@@ -220,15 +187,12 @@ def make_submission(x_raw, y, x_test, test_ids, params, thr, f1):
 
 
 def run_submit(x_raw, y, x_test, test_ids):
-    """CV (CV_BAGS bags) to get the threshold, then final training (FINAL_BAGS bags)."""
     f1, thr = cross_validate(x_raw, y, dict(BASE, n_bags=CV_BAGS))
     print(f"CV F1 = {f1:.4f}, threshold = {thr:.3f}", flush=True)
     make_submission(x_raw, y, x_test, test_ids, dict(BASE, n_bags=FINAL_BAGS), thr, f1)
 
 
 def run_cv(x_raw, y, x_test, test_ids):
-    """Ablation: one hyperparameter changed at a time w.r.t. BASE (single model,
-    n_bags=1), then a CSV with the best configuration."""
     f1, thr = cross_validate(x_raw, y, BASE)
     print(f"BASE {BASE}\n  -> F1={f1:.4f} (threshold {thr:.3f})", flush=True)
     results = [(f1, thr, BASE)]
